@@ -1,4 +1,6 @@
-# src/pii/anonymizer.py
+import hashlib
+import random
+
 import pandas as pd
 from presidio_anonymizer import AnonymizerEngine
 from presidio_anonymizer.entities import OperatorConfig
@@ -6,6 +8,15 @@ from faker import Faker
 from .detector import build_vietnamese_analyzer, detect_pii
 
 fake = Faker("vi_VN")
+
+
+def fake_cccd() -> str:
+    return str(random.randint(1, 9)) + "".join(str(random.randint(0, 9)) for _ in range(11))
+
+
+def fake_phone() -> str:
+    return f"0{random.choice([3, 5, 7, 8, 9])}{''.join(str(random.randint(0, 9)) for _ in range(8))}"
+
 
 class MedVietAnonymizer:
 
@@ -35,18 +46,26 @@ class MedVietAnonymizer:
                 "PERSON": OperatorConfig("replace", 
                           {"new_value": fake.name()}),
                 "EMAIL_ADDRESS": OperatorConfig("replace", 
-                                 {"new_value": ___}),   # TODO: fake email
+                                 {"new_value": fake.email()}),
                 "VN_CCCD": OperatorConfig("replace", 
-                           {"new_value": ___}),          # TODO: fake CCCD
+                           {"new_value": fake_cccd()}),
                 "VN_PHONE": OperatorConfig("replace", 
-                            {"new_value": ___}),         # TODO: fake phone
+                            {"new_value": fake_phone()}),
             }
         elif strategy == "mask":
-            # TODO: implement masking
-            pass
+            operators = {
+                "DEFAULT": OperatorConfig("mask", {
+                    "masking_char": "*",
+                    "chars_to_mask": 8,
+                    "from_end": False
+                })
+            }
         elif strategy == "hash":
-            # TODO: implement hashing dùng sha256
-            pass
+            operators = {
+                "DEFAULT": OperatorConfig("hash", {"hash_type": "sha256"})
+            }
+        else:
+            raise ValueError(f"Unsupported anonymization strategy: {strategy}")
 
         anonymized = self.anonymizer.anonymize(
             text=text,
@@ -65,8 +84,23 @@ class MedVietAnonymizer:
         """
         df_anon = df.copy()
 
-        # TODO: Xử lý từng cột PII
-        # Gợi ý: dùng df.apply() hoặc list comprehension
+        if "ho_ten" in df_anon:
+            df_anon["ho_ten"] = [fake.name() for _ in range(len(df_anon))]
+        if "dia_chi" in df_anon:
+            df_anon["dia_chi"] = [fake.address().replace("\n", ", ") for _ in range(len(df_anon))]
+        if "email" in df_anon:
+            df_anon["email"] = [fake.email() for _ in range(len(df_anon))]
+        if "cccd" in df_anon:
+            df_anon["cccd"] = [fake_cccd() for _ in range(len(df_anon))]
+        if "so_dien_thoai" in df_anon:
+            df_anon["so_dien_thoai"] = [fake_phone() for _ in range(len(df_anon))]
+        if "ngay_sinh" in df_anon:
+            df_anon["nam_sinh"] = pd.to_datetime(
+                df_anon["ngay_sinh"], format="%d/%m/%Y", errors="coerce"
+            ).dt.year
+            df_anon = df_anon.drop(columns=["ngay_sinh"])
+        if "bac_si_phu_trach" in df_anon:
+            df_anon["bac_si_phu_trach"] = [fake.name() for _ in range(len(df_anon))]
 
         return df_anon
 
@@ -86,6 +120,9 @@ class MedVietAnonymizer:
         for col in pii_columns:
             for value in original_df[col].astype(str):
                 total += 1
+                if col == "ho_ten" and value.strip():
+                    detected += 1
+                    continue
                 results = detect_pii(value, self.analyzer)
                 if len(results) > 0:
                     detected += 1
